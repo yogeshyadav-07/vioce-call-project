@@ -1,9 +1,12 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.config import get_settings
 from backend.app.main import app
 from backend.app.ratelimit import SlidingLimiter
+from backend.app.signaling import RoomManager
 
 client = TestClient(app)
 
@@ -47,21 +50,43 @@ def test_create_room():
     assert len(code) == 6 and code.isalnum()
 
 
-def test_ws_two_peers_and_third_rejected():
-    with client.websocket_connect("/ws/TEST42") as a:
-        assert a.receive_json()["peers"] == 0
-        with client.websocket_connect("/ws/test42") as b:
-            assert b.receive_json()["peers"] == 1
-            assert a.receive_json()["type"] == "peer_joined"
-            a.send_json({"type": "offer", "sdp": {"type": "offer", "sdp": "x"}})
-            got = b.receive_json()
-            assert got["type"] == "offer" and "from" in got
-            a.send_json({"type": "evil", "x": 1})  # dropped
-            a.send_json({"type": "utterance", "original": "a", "translated": "b"})
-            assert b.receive_json()["type"] == "utterance"
-            with client.websocket_connect("/ws/TEST42") as c:
-                assert c.receive_json()["type"] == "room_full"
-        assert a.receive_json()["type"] == "peer_left"
+class FakeWS:
+    def __init__(self):
+        self.sent = []
+
+    async def send_json(self, data):
+        self.sent.append(data)
+
+
+def test_room_manager_two_peers_and_third_rejected():
+    async def run():
+        m = RoomManager()
+        a, b, c = FakeWS(), FakeWS(), FakeWS()
+        pa = await m.join("R1", a)
+        assert a.sent[0]["peers"] == 0
+        pb = await m.join("R1", b)
+        assert b.sent[0]["peers"] == 1 and a.sent[-1]["type"] == "peer_joined"
+        assert await m.join("R1", c) is None  # third participant rejected
+        await m.relay("R1", pa, {"type": "offer", "sdp": {}})
+        assert b.sent[-1]["type"] == "offer" and b.sent[-1]["from"] == pa
+        n = len(b.sent)
+        await m.relay("R1", pa, {"type": "evil"})  # unknown type dropped
+        await m.relay("R1", pa, {"type": "utterance", "original": "x" * 1001, "translated": "y"})  # too long dropped
+        assert len(b.sent) == n
+        await m.relay("R1", pa, {"type": "utterance", "original": "a", "translated": "b"})
+        assert b.sent[-1]["type"] == "utterance"
+        await m.leave("R1", pb)
+        assert a.sent[-1]["type"] == "peer_left"
+        await m.leave("R1", pa)
+        assert "R1" not in m.rooms
+
+    asyncio.run(run())
+
+
+def test_ws_single_client_joins():
+    with client.websocket_connect("/ws/SOLO99") as a:
+        j = a.receive_json()
+        assert j["type"] == "joined" and j["peers"] == 0
 
 
 def test_ws_invalid_room():
@@ -81,3 +106,15 @@ def test_provider_selection_and_warnings(monkeypatch):
 def test_rate_limiter():
     l = SlidingLimiter()
     assert all(l.allow("ip", 3) for _ in range(3)) and not l.allow("ip", 3)
+
+
+def test_mistral_selection(monkeypatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "m-test")
+    s = get_settings()
+    assert (s.stt_provider, s.translate_provider, s.tts_provider) == ("browser", "mistral", "browser")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")  # both keys: translation prefers Mistral
+    assert get_settings().translate_provider == "mistral"
+    monkeypatch.setenv("STT_PROVIDER", "mistral")
+    assert get_settings().stt_provider == "mistral"
+    monkeypatch.setenv("MISTRAL_API_KEY", "")
+    assert any("MISTRAL_API_KEY" in w for w in get_settings().warnings())

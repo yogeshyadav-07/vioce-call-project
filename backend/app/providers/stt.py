@@ -1,25 +1,23 @@
-import httpx
-
 from ..config import get_settings
-from .errors import ProviderError, from_openai, network
+from .errors import ProviderError, from_provider
+from .http import post
 
 
 async def transcribe(audio: bytes, filename: str, content_type: str, language: str) -> str:
     s = get_settings()
-    if s.stt_provider != "openai":
+    p = s.stt_provider
+    if p == "openai":
+        name, env, key = "OpenAI", "OPENAI_API_KEY", s.openai_api_key
+        url, model = "https://api.openai.com/v1/audio/transcriptions", s.openai_stt_model
+    elif p == "mistral":
+        name, env, key = "Mistral", "MISTRAL_API_KEY", s.mistral_api_key
+        url, model = "https://api.mistral.ai/v1/audio/transcriptions", s.mistral_stt_model
+    else:
         raise ProviderError(400, "stt_not_server_side", "Server STT is off. The browser's own speech recognition is used instead.")
-    if not s.openai_api_key:
-        raise ProviderError(503, "missing_api_key", "OPENAI_API_KEY is not set in .env.")
-    try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {s.openai_api_key}"},
-                data={"model": s.openai_stt_model, "language": language},
-                files={"file": (filename, audio, content_type)},
-            )
-    except httpx.HTTPError:
-        raise network()
+    if not key:
+        raise ProviderError(503, "missing_api_key", f"{env} is not set in .env.")
+    r = await post(url, timeout=30, headers={"Authorization": f"Bearer {key}"},
+                   data={"model": model, "language": language}, files={"file": (filename, audio, content_type)})
     if r.status_code != 200:
-        raise from_openai(r.status_code)
+        raise from_provider(name, r.status_code)
     return (r.json().get("text") or "").strip()

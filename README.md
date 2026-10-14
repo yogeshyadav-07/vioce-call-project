@@ -15,9 +15,12 @@ Do browser users ke beech WebRTC voice call, jisme ek bande ki speech **transcri
 
 | Kaam | Keys ke bina (free) | Key ke saath |
 |---|---|---|
-| Speech-to-text | Browser Web Speech API (sirf Chrome/Edge) | OpenAI transcription |
-| Translation | **DEMO phrasebook (SIMULATED, AI nahi)** — sirf kuch fixed phrases | OpenAI chat model ya Google Translate API key |
-| Text-to-speech | Browser `speechSynthesis` (device me Hindi voice honi chahiye) | OpenAI TTS |
+| Speech-to-text | Browser Web Speech API (sirf Chrome/Edge) | OpenAI transcription, ya Mistral Voxtral (`STT_PROVIDER=mistral`) |
+| Translation | **DEMO phrasebook (SIMULATED, AI nahi)** — sirf kuch fixed phrases | Mistral, OpenAI ya Google Translate |
+| Text-to-speech | Browser `speechSynthesis` (device me Hindi voice honi chahiye) | OpenAI TTS (Mistral TTS abhi implement nahi hai) |
+
+### "Output" ka default: Original voice
+Har participant ke paas "I want to hear" me ek option hai: **Original voice — as spoken (default)**. Ye default hai. Iska matlab: samne wala jaisa bol raha hai, waisi hi original awaaz full volume me sunai deti hai, koi translation nahi hota aur koi translation API call (cost) nahi lagti. Transcript phir bhi dikhta hai. Translation chahiye to Hindi ya English chuno. Tab original awaaz slider se kam ho jaati hai (default 10%; 0 karo to sirf translation sunai degi).
 
 Demo mode me UI upar banner dikhata hai aur transcript me har line pe "SIMULATED" likha aata hai. Jo phrase phrasebook me nahi hai, wo bola nahi jata.
 
@@ -120,13 +123,30 @@ Keys **sirf backend** me rehti hain, frontend code me kabhi nahi aati. `.env` ko
 
 | Variable | Kab zaroori hai |
 |---|---|
+| `MISTRAL_API_KEY` | Translation ke liye Mistral (console.mistral.ai se key), ya `STT_PROVIDER=mistral` |
 | `OPENAI_API_KEY` | Jab STT / translation / TTS me se koi `openai` ho (ya `auto` aur key set ho) |
 | `GOOGLE_TRANSLATE_API_KEY` | Sirf jab `TRANSLATE_PROVIDER=google` ho. Ye plain API key hai (Cloud Translation v2). Service-account JSON support nahi hai |
 | `STT_PROVIDER` / `TRANSLATE_PROVIDER` / `TTS_PROVIDER` | Optional. `auto` (default), warna explicitly choose karo |
 | `STUN_SERVER_URL` | Default Google ka public STUN |
 | `TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | Optional, strict NAT/firewall ke liye |
 
-**`auto` ka matlab:** `OPENAI_API_KEY` hai to OpenAI use hoga, nahi to (translate ke liye Google key hai to Google, warna) free browser/demo fallback.
+**`auto` ka matlab:**
+- STT: OpenAI key ho to OpenAI, warna browser. Mistral STT sirf tab chalta hai jab aap `STT_PROVIDER=mistral` likho.
+- Translation: Mistral key > OpenAI key > Google key > demo phrasebook.
+- TTS: OpenAI key ho to OpenAI, warna browser.
+
+### Rate limit / quota issue ho to (recommended setup)
+OpenAI ka 429 ya quota error aa raha ho to ye `.env` use karo:
+
+```
+STT_PROVIDER=browser
+TRANSLATE_PROVIDER=mistral
+TTS_PROVIDER=browser
+MISTRAL_API_KEY=...
+```
+Isme speech recognition aur bolna browser ke free features se hota hai (Chrome/Edge), aur sirf translation Mistral se hota hai. App 429/503 pe ek baar khud retry karta hai, par free plans ki limits phir bhi lag sakti hain.
+
+Mistral Voxtral STT (`STT_PROVIDER=mistral`) maine live test nahi kiya. Browser se webm audio jaata hai, agar format error aaye to `STT_PROVIDER=browser` pe wapas jao.
 
 Example (poora OpenAI):
 
@@ -177,7 +197,7 @@ Phone pe server accessible rakhne ke liye `--host 0.0.0.0` se start karo aur Win
 pytest
 ```
 
-Ye health, config/provider selection, demo translation, validation, room signaling (2 users + teesra reject), aur rate limiter test karta hai. Live OpenAI/Google calls aur real microphone/two-browser call **automated tests me cover nahi hain**, unhe upar ke steps se manually test karna hoga.
+Ye health, config/provider selection (OpenAI/Mistral), demo translation, validation, room manager (2 users, teesra reject, galat message drop), aur rate limiter test karta hai. Live OpenAI/Google calls aur real microphone/two-browser call **automated tests me cover nahi hain**, unhe upar ke steps se manually test karna hoga.
 
 ---
 
@@ -192,7 +212,8 @@ Ye health, config/provider selection, demo translation, validation, room signali
 | **CORS error** | Frontend aur backend same origin (`localhost:8000`) pe hone chahiye. Alag origin se kholte ho to `.env` ke `ALLOWED_ORIGINS` me add karo |
 | **Signaling / "Room is full"** | Room me sirf 2 log. Naya room banao. Server chal raha hai ya nahi check karo, aur room code sahi daalo |
 | **Connected nahi ho raha ("Connection failed")** | Alag networks/mobile data/strict firewall me STUN kaafi nahi hota, **TURN server** chahiye. `.env` me `TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` daalo (coturn ya koi TURN provider) |
-| **API quota / 429** | OpenAI/Google billing aur limits dekho. App ka apna limit `RATE_LIMIT_PER_MIN` hai |
+| **API quota / 429** | Upar wala recommended setup (browser STT + Mistral translation) use karo, ya billing/limits dekho. App ka apna limit `RATE_LIMIT_PER_MIN` hai |
+| **Jis language me bola wahi sunai de raha hai** | Default "Original voice" me ye normal hai. Translation ke liye "I want to hear" me language chuno, aur original volume slider 0 karo |
 | **Translation bolta nahi** | Device me us language ki TTS voice install nahi hogi. Windows Settings → Time & language → Speech se Hindi voice add karo, ya OpenAI TTS use karo |
 | **Awaaz echo ho rahi hai** | Headphones lagao, original voice slider kam karo |
 | **`pip`/`uvicorn` not found** | venv activate karo (`.\.venv\Scripts\Activate.ps1`) |

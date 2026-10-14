@@ -7,7 +7,7 @@ const S = { cfg: null, session: null, stream: null, listener: null, peer: null, 
   queue: [], name: 'Guest', spoken: 'hi', output: 'en', timer: null, startedAt: 0, leaving: false };
 
 const PIPE = { idle: 'Idle', loading: 'Loading', listening: 'Listening', translating: 'Translating', speaking: 'Speaking', disconnected: 'Disconnected', error: 'Error' };
-const lang = (c) => (S.cfg.languages.find((l) => l.code === c) || { name: c });
+const lang = (c) => (c === 'original' ? { name: 'Original voice (no translation)' } : (S.cfg.languages.find((l) => l.code === c) || { name: c }));
 const show = (v) => document.querySelectorAll('.view').forEach((e) => { e.hidden = e.id !== `view-${v}`; });
 
 function setPipe(state, detail) {
@@ -25,9 +25,10 @@ async function init() {
   c.languages.forEach((l) => { const s = document.createElement('span'); s.className = 'chip'; s.textContent = `${l.name} (${l.native})`; $('#langChips').append(s); });
   for (const id of ['#spoken', '#output', '#spoken2', '#output2']) {
     $(id).innerHTML = '';
+    if (id.startsWith('#output')) $(id).add(new Option('Original voice — as spoken (default)', 'original'));
     c.languages.forEach((l) => $(id).add(new Option(`${l.name} — ${l.native}`, l.code)));
   }
-  $('#spoken').value = 'hi'; $('#output').value = 'en';
+  $('#spoken').value = 'hi'; $('#output').value = 'original';
   const p = c.providers;
   $('#modeBanner').textContent = c.demo_translation
     ? 'DEMO MODE: translation is a tiny SIMULATED phrasebook, not AI. Add an API key for real translation.'
@@ -87,7 +88,7 @@ async function join(code) {
     onOpen: () => setConn('Waiting for the other person…', ''),
     onJoined: (m) => { if (m.peers > 0) setConn('Connecting…', ''); },
     onPeerJoined: () => setConn('Participant joined, connecting…', ''),
-    onPeerProfile: (p) => { S.peer = { name: String(p.name || 'Guest').slice(0, 24), spoken: p.spoken, output: p.output }; renderPeer(); if (!S.listenerOn) { S.listener.start(); S.listenerOn = true; } setPipe('listening'); },
+    onPeerProfile: (p) => { S.peer = { name: String(p.name || 'Guest').slice(0, 24), spoken: p.spoken, output: p.output }; renderPeer(); if (!S.listenerOn) { S.listener.start(); S.listenerOn = true; } applyVol(); setPipe('listening'); },
     onRemoteStream: (st) => { $('#remoteAudio').srcObject = st; applyVol(); },
     onConn: onConn,
     onPeerLeft: () => { S.peer = null; stopTimer(); renderPeer(); setConn('Participant left', 'bad'); setPipe('disconnected'); },
@@ -147,6 +148,10 @@ async function onLocalText(text) {
   if (!S.peer) return;
   const src = S.spoken, tgt = S.peer.output;
   const li = addLine({ who: `${S.name} (You)`, own: true, original: text, source: src });
+  if (tgt === 'original' || tgt === src) { // listener wants the original voice: no translation call, no cost
+    S.session.send({ type: 'utterance', speaker: S.name, original: text, translated: '', source: src, target: tgt, passthrough: true });
+    return;
+  }
   setPipe('translating');
   try {
     const r = await api.translate(text, src, tgt);
@@ -163,6 +168,7 @@ function fail(e) { setPipe('error'); toast(e.message); setTimeout(() => { if (S.
 function onRemoteUtterance(m) {
   if (typeof m.original !== 'string' || typeof m.translated !== 'string') return;
   const li = addLine({ who: S.peer ? S.peer.name : 'Participant', own: false, original: m.original.slice(0, 1000), source: m.source });
+  if (m.passthrough) return; // listener hears the original voice; transcript only
   const note = m.simulated ? (m.matched ? 'SIMULATED demo phrasebook — not AI translation' : 'Demo mode: no phrase match, not spoken') : '';
   setTrans(li, m.translated.slice(0, 1000), m.target, note);
   if (m.matched === false) return;
@@ -199,7 +205,10 @@ async function speak(text, code) {
   await new Promise((res) => { u.onend = res; u.onerror = res; speechSynthesis.speak(u); });
 }
 
-function applyVol() { $('#remoteAudio').volume = S.speaking ? 0 : $('#origVol').value / 100; }
+function translating() { return S.output !== 'original' && !!S.peer && S.peer.spoken !== S.output; }
+function applyVol() {
+  $('#remoteAudio').volume = S.speaking ? 0 : translating() ? $('#origVol').value / 100 : 1; // full original voice unless translating
+}
 $('#origVol').oninput = applyVol;
 
 // ---------- controls ----------
@@ -212,7 +221,7 @@ $('#muteBtn').onclick = () => {
 };
 function langChanged() {
   S.spoken = $('#spoken2').value; S.output = $('#output2').value;
-  S.listener?.setLang(lang(S.spoken).stt); S.session?.sendProfile();
+  S.listener?.setLang(lang(S.spoken).stt); S.session?.sendProfile(); applyVol();
 }
 $('#spoken2').onchange = langChanged; $('#output2').onchange = langChanged;
 $('#copyBtn').onclick = async () => {

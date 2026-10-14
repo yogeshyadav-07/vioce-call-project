@@ -18,6 +18,9 @@ class Settings:
     port: int
     openai_api_key: str
     google_translate_api_key: str
+    mistral_api_key: str
+    mistral_stt_model: str
+    mistral_translate_model: str
     stt_pref: str
     translate_pref: str
     tts_pref: str
@@ -42,6 +45,8 @@ class Settings:
     def translate_provider(self) -> str:
         if self.translate_pref != "auto":
             return self.translate_pref
+        if self.mistral_api_key:
+            return "mistral"
         if self.openai_api_key:
             return "openai"
         if self.google_translate_api_key:
@@ -56,8 +61,11 @@ class Settings:
 
     def warnings(self) -> list:
         w = []
-        if "openai" in (self.stt_provider, self.translate_provider, self.tts_provider) and not self.openai_api_key:
+        used = (self.stt_provider, self.translate_provider, self.tts_provider)
+        if "openai" in used and not self.openai_api_key:
             w.append("A provider is set to 'openai' but OPENAI_API_KEY is missing in .env.")
+        if "mistral" in used and not self.mistral_api_key:
+            w.append("A provider is set to 'mistral' but MISTRAL_API_KEY is missing in .env.")
         if self.translate_provider == "google" and not self.google_translate_api_key:
             w.append("TRANSLATE_PROVIDER=google but GOOGLE_TRANSLATE_API_KEY is missing in .env.")
         if self.turn_url and not (self.turn_user and self.turn_cred):
@@ -84,6 +92,9 @@ def get_settings() -> Settings:
         port=int(_get("PORT", "8000") or 8000),
         openai_api_key=_get("OPENAI_API_KEY"),
         google_translate_api_key=_get("GOOGLE_TRANSLATE_API_KEY"),
+        mistral_api_key=_get("MISTRAL_API_KEY"),
+        mistral_stt_model=_get("MISTRAL_STT_MODEL", "voxtral-mini-latest"),
+        mistral_translate_model=_get("MISTRAL_TRANSLATE_MODEL", "mistral-small-latest"),
         stt_pref=_get("STT_PROVIDER", "auto").lower(),
         translate_pref=_get("TRANSLATE_PROVIDER", "auto").lower(),
         tts_pref=_get("TTS_PROVIDER", "auto").lower(),

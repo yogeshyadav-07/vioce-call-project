@@ -1,6 +1,9 @@
 """Two-person room signaling. Relays WebRTC offers/answers/ICE and small JSON messages. Stores nothing."""
+import logging
 import re
 import secrets
+
+log = logging.getLogger("bhashabridge")
 
 ROOM_RE = re.compile(r"^[A-Z0-9]{4,12}$")
 ALLOWED = {"offer", "answer", "ice", "profile", "utterance"}
@@ -14,8 +17,8 @@ class RoomManager:
     async def _safe(self, ws, data):
         try:
             await ws.send_json(data)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("signaling send failed: %s", type(e).__name__)
 
     async def join(self, code: str, ws):
         room = self.rooms.setdefault(code, {})
